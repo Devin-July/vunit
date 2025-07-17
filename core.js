@@ -3,6 +3,7 @@ const spawn = require('cross-spawn');
 const path = require('path');
 const chokidar = require('chokidar');
 const fs = require('fs');
+const { merge } = require('webpack-merge');
 /**
  *
  * @param {Object } conf
@@ -11,15 +12,24 @@ const fs = require('fs');
  * @param {string}  conf.spec           Glob to mocha spec files.
  */
 
-const preProcess = (conf) => ({
-  watchedDirectories: conf.watch && conf.watch.length ? conf.watch.split(',') : [],
-  webpackConfig: `${conf['webpack-config'] ? conf['webpack-config'] : path.join(__dirname, 'webpack.config.js')}`,
-  specGlob: `${conf.spec ? conf.spec : ''}`,
-  coverage: conf.coverage,
-  report: conf.report,
-  require: conf.require ? conf.require : '',
-  reporter: conf.reporter ? conf.reporter : 'spec',
-});
+const preProcess = (conf) => {
+  const defaultWebpackConfig = path.join(__dirname, 'webpack.config.js');
+  const customWebpackConfig = conf['webpack-config'];
+  
+  const webpackConfigPath = customWebpackConfig 
+    ? customWebpackConfig 
+    : createMergedWebpackConfig(defaultWebpackConfig);
+
+  return {
+    watchedDirectories: conf.watch && conf.watch.length ? conf.watch.split(',') : [],
+    webpackConfig: webpackConfigPath,
+    specGlob: `${conf.spec ? conf.spec : ''}`,
+    coverage: conf.coverage,
+    report: conf.report,
+    require: conf.require ? conf.require : '',
+    reporter: conf.reporter ? conf.reporter : 'spec',
+  };
+};
 
 module.exports.preProcess = preProcess;
 
@@ -54,6 +64,43 @@ const isValidJSON = (pth, fslocal = fs) => {
   return true;
 };
 
+/**
+ * Creates a merged webpack configuration by combining the default config
+ * with an optional webpack.overrides.conf.js file from the project root.
+ * @param {string} defaultConfigPath - Path to the default webpack config
+ * @param {Object} fslocal - File system module for testing
+ * @returns {string} - Path to the webpack config to use
+ */
+const createMergedWebpackConfig = (defaultConfigPath, fslocal = fs) => {
+  const overridesPath = path.join(process.cwd(), 'webpack.overrides.conf.js');
+  
+  if (!fslocal.existsSync(overridesPath)) {
+    return defaultConfigPath;
+  }
+
+  try {
+    const resolvedDefaultPath = path.resolve(defaultConfigPath);
+    delete require.cache[resolvedDefaultPath];
+    const defaultConfig = require(resolvedDefaultPath);
+    
+    const resolvedOverridesPath = path.resolve(overridesPath);
+    delete require.cache[resolvedOverridesPath];
+    const overridesConfig = require(resolvedOverridesPath);
+    
+    const mergedConfig = merge(defaultConfig, overridesConfig);
+    
+    const tempConfigPath = path.join(os.tmpdir(), `vunit-webpack-${Date.now()}.js`);
+    const configContent = `module.exports = ${JSON.stringify(mergedConfig, null, 2)};`;
+    fslocal.writeFileSync(tempConfigPath, configContent);
+    
+    return tempConfigPath;
+  } catch (error) {
+    console.warn(`Warning: Failed to merge webpack.overrides.conf.js: ${error.message}`);
+    console.warn('Falling back to default webpack configuration.');
+    return defaultConfigPath;
+  }
+};
+
 // Check JSON config.
 if (!isValidJSON(pathToNYCConfig)) {
   console.error(`.nycrc is invalid, ${pathToNYCConfig}`);
@@ -62,6 +109,7 @@ if (!isValidJSON(pathToNYCConfig)) {
 
 module.exports.isValidJSON = isValidJSON;
 module.exports.fileExistsOrDefault = fileExistsOrDefault;
+module.exports.createMergedWebpackConfig = createMergedWebpackConfig;
 
 module.exports.run = (conf) => {
   let watcher;
