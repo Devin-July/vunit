@@ -3,6 +3,7 @@ const spawn = require('cross-spawn');
 const path = require('path');
 const chokidar = require('chokidar');
 const fs = require('fs');
+const { merge: webpackMerge } = require('webpack-merge');
 /**
  *
  * @param {Object } conf
@@ -11,15 +12,39 @@ const fs = require('fs');
  * @param {string}  conf.spec           Glob to mocha spec files.
  */
 
-const preProcess = (conf) => ({
-  watchedDirectories: conf.watch && conf.watch.length ? conf.watch.split(',') : [],
-  webpackConfig: `${conf['webpack-config'] ? conf['webpack-config'] : path.join(__dirname, 'webpack.config.js')}`,
-  specGlob: `${conf.spec ? conf.spec : ''}`,
-  coverage: conf.coverage,
-  report: conf.report,
-  require: conf.require ? conf.require : '',
-  reporter: conf.reporter ? conf.reporter : 'spec',
-});
+const preProcess = (conf) => {
+  const febsOverridePath = path.join(process.cwd(), 'webpack.overrides.conf.js');
+  const hasOverrideFile = fs.existsSync(febsOverridePath);
+
+  const getWebpackConfig = () => {
+    if (conf['webpack-config']) {
+      return conf['webpack-config'];
+    } else if (hasOverrideFile) {
+      const defaultConfigPath = path.join(__dirname, 'webpack.config.js');
+      const tempConfigPath = path.join(process.cwd(), '.vunit-webpack-merged.config.js');
+      const configContent = `const { merge } = require('webpack-merge');
+const defaultConfig = require('${defaultConfigPath}');
+const overrides = require('${febsOverridePath}');
+
+module.exports = merge(defaultConfig, overrides);`;
+      fs.writeFileSync(tempConfigPath, configContent);
+      
+      return tempConfigPath;
+    }
+    return path.join(__dirname, 'webpack.config.js');
+  };
+
+  return {
+    watchedDirectories: conf.watch && conf.watch.length ? conf.watch.split(',') : [],
+    webpackConfig: getWebpackConfig(),
+    specGlob: `${conf.spec ? conf.spec : ''}`,
+    coverage: conf.coverage,
+    report: conf.report,
+    require: conf.require ? conf.require : '',
+    reporter: conf.reporter ? conf.reporter : 'spec',
+    hasOverrideFile,
+  };
+};
 
 module.exports.preProcess = preProcess;
 
@@ -75,7 +100,17 @@ module.exports.run = (conf) => {
   console.log('Running tests:');
   console.log('--------------------------------');
   console.log(`watched directories: ${confPreprocessed.watchedDirectories}`);
-  console.log(`webpack config: ${conf['webpack-config'] ? conf['webpack-config'] : 'Using built-in config'}`);
+  
+  let configMessage;
+  if (conf['webpack-config']) {
+    configMessage = conf['webpack-config'];
+  } else if (confPreprocessed.hasOverrideFile) {
+    configMessage = 'Using built-in config merged with webpack.overrides.conf.js';
+  } else {
+    configMessage = 'Using built-in config';
+  }
+  console.log(`webpack config: ${configMessage}`);
+  
   console.log(`specGlob: ${confPreprocessed.specGlob}`);
   console.log(`Coverage: ${confPreprocessed.coverage}`);
 
